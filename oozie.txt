@@ -1,0 +1,51 @@
+ATC_ANOMALY_RUN
+
+export OOZIE_URL=http://bigredoozie.target.com:11000/oozie/
+oozie job -config /home_dir/svrca001/iso_svm.properties -run
+
+oozie job -info 0283563-210409091017002-oozie-oozi-W
+
+
+http://brcn2003.target.com:8088/proxy/
+application_1611805998673_13210778
+
+job_1611805998673_13210778
+
+
+export OOZIE_URL=http://bigredoozie.target.com:11000/oozie/
+oozie job -config /home_dir/svrca001/iso_svm_select.properties -run
+
+
+export OOZIE_URL=http://bigredoozie.target.com:11000/oozie/
+oozie job -config /home_dir/svrca001/iso_svm_d234.properties -run
+
+job: 0277754-210624160232189-oozie-oozi-W
+
+
+
+############## Dpt: @324. ################################
+
+export OOZIE_URL=http://bigredoozie.target.com:11000/oozie/
+oozie job -config /home_dir/svrca001/iso_svm_d324.properties -run
+
+job: 0313111-210624155928880-oozie-oozi-W
+
+########################################################
+
+export OOZIE_URL=http://bigredoozie.target.com:11000/oozie/
+oozie job -config /home_dir/z001tv4/atc_test.properties -run
+
+@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+export OOZIE_URL=http://bigredoozie.target.com:11000/oozie/
+oozie job -config /home_dir/svrca001/iso_svm_d261.properties -run
+
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+export OOZIE_URL=http://bigredoozie.target.com:11000/oozie/
+oozie job -config /home_dir/svrca001/iso_svm_d3.properties -run
+
+
+
+oozie.coord.application.path=${nameNode}/user/SVCDSDSO/DSO_IPC/BKRM_RCA_3AM/dev/coordinator_ib.xml
+
