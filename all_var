@@ -1,0 +1,1352 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[9]:
+
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from pylab import rcParams
+import sklearn.preprocessing as skp
+import sklearn.metrics as sm
+
+from sklearn.ensemble import RandomForestClassifier as rfc
+
+import seaborn as sns
+import lightgbm as lgbm
+
+pd.set_option('max_columns', 500)
+pd.set_option('max_rows', 500)
+pd.options.display.float_format = '{:.2f}'.format
+
+from dataminer.connector import BigRed
+from sklearn.model_selection import train_test_split
+import json
+import gc
+cred = json.load(open("credentails.json"))
+gc.collect()
+session=BigRed(username=cred['zid'], password=cred['pass'])
+
+
+# In[10]:
+
+
+import warnings
+warnings.filterwarnings('ignore')
+
+
+def Preprep(sample_df):
+    df = sample_df.copy()
+    columns = [x.split("s.")[1] for x in df.columns]
+    df.columns = columns
+    df = df.fillna(0)
+    df['availableqtywithoutthreshold'] = df['onhand']
+    df['allowance'] = df['availableqtywithoutthreshold'] - df['shp_req_q']
+    df['eoh_q'] = df['eoh_q'].astype('float')
+    df['release_qty'] = df['eoh_q'] - df['availableqtywithoutthreshold']
+    df['inf_flag'] = np.where(df['inf_q']>0,1,0)
+    df['received_hr'] = df['received_ts'].apply(lambda x : x.hour)
+    df['received_hr_c'] = pd.cut(df['received_hr'],bins=4,labels=False)
+    for col in dep_var:
+        df[col]=df[col].astype('float')
+    return df
+
+
+
+def coef_var(x):
+    return (np.std(x)/np.mean(x))*100
+
+
+# In[11]:
+
+
+existing_features = ['shp_req_q', 'availableqty', 'availableqtywithoutthreshold', 'days_sold_year', 'sales_year', 'units_year', 'days_sold_1m', 'days_sold_1m_norm', 'units_1m', 'days_sold_7d', 'units_7d', 'sales_1m', 'days_sold_3m', 'units_3m', 'sales_3m',
+                     'sales_3m_norm', 'days_since_last_sale_both', 'item_year_sales', 'no_of_stores_sold', 'store_year_sales', 'store_year_units', 'days_since_last_sale', 'days_since_first_sale', 'days_sold_norm', 'avg_eoh_3d', 'avg_eoh_2d',
+                     'sales_year_norm', 'units_year_norm', 'retl_a', 'avg_eoh_7d', 'avg_eoh_q', 'avg_eoh_30d', 'days_avail', 'eoh_q_lt_3', 'perc_eoh_lt_3', 'ipi', 'store_fulfill_units', 'store_inf_units', 'store_inf_rate', 'item_fulfill_units',
+                     'item_inf_units', 'item_inf_rate', 'dept_clas_fulfill_units', 'dept_clas_inf_units', 'dept_clas_inf_rate', 'total_oh', 'nbr_str', 'avg_oh_network', 'si_inf_rate', 'weight', 'back_room_quantity', 'si_3_inf_rate', 'si_7_inf_rate',
+                     'si_14_inf_rate', 'si_30_inf_rate', 'i_3_inf_rate', 'i_7_inf_rate', 'i_14_inf_rate', 'i_30_inf_rate', 's_3_inf_rate', 's_7_inf_rate', 's_14_inf_rate', 's_30_inf_rate', 'sdc_3_inf_rate', 'sdc_7_inf_rate', 'sdc_14_inf_rate',
+                     'dc_3_inf_rate', 'dc_7_inf_rate', 'dc_14_inf_rate', 'dc_30_inf_rate', 'research_evnt_exists_3days', 'any_evnt_exists_3days', 'research_evnt_exists_7days', 'any_evnt_exists_7days', 'si_3_fulfill', 'i_3_fulfill', 's_3_fulfill',
+                     'sdc_3_fulfill', 'dc_3_fulfill', 'boh_q', 'eoh_q', '7d_avg_boh_q', '7d_avg_eoh_q', '7d_boh_2_sls_rate', '7d_eoh_2_sls_rate', '7d_sell_thru_rate',
+                     '7d_inv_trnovr_rate', '7d_days_to_sell_inv', '7d_actual_oh_avg', 'repln_q', '7d_repln_rate', '7d_dc_high_repln_rate',
+                     '7d_doh', 'shp_oos_eoh_q', '7d_min_shp_oos_eoh_q', 'sls_forcast_q', 'threshold', 'allowance', 'release_qty']
+
+
+existing_exclusion_features = ['store_fulfill_units', 'store_inf_units', 'store_inf_rate', 'item_fulfill_units', 'item_inf_units', 'item_inf_rate', 'dept_clas_fulfill_units', 'dept_clas_inf_units',
+                               'dept_clas_inf_rate', 'atp_units']
+
+dep_var = [x for x in existing_features if x not in existing_exclusion_features]
+
+
+# In[7]:
+
+
+
+
+
+# In[13]:
+
+
+var = dep_var + ['inf_flag']
+
+
+# In[14]:
+
+
+# query = ''' select s.* from z0019dc.threshold_by_fulfillment_type_base_data_stg6 TABLESAMPLE(0.75 PERCENT) s
+#                     where fulfillment_type_id = 3 and
+#                    month(local_attempted_d) = {0} and
+#                    mdse_grp_n in ("HARDLINES")
+#                    '''
+
+
+# query = '''
+# with t1 as (
+# select s.*,
+# floor(rand() * 10 + 1) as random_no
+# from z0019dc.threshold_by_fulfillment_type_base_data_stg6  as s
+#                     where fulfillment_type_id = 3 and
+#                    month(local_attempted_d) = {0} and
+#                    mdse_grp_n in ("HARDLINES")
+#                    )
+# select s.*
+# from t1 as s
+# where s.random_no <= {1}
+#                    '''
+
+
+query = ''' 
+with t1 as (
+select s.*
+from z0019dc.threshold_by_fulfillment_type_base_data_stg6  as s
+                    where fulfillment_type_id = 3 and
+                   month(local_attempted_d) = {0} and
+                   mdse_grp_n in ("HARDLINES")
+                   )
+select s.* 
+from t1 as s
+where floor(rand()*100) <= {1}
+distribute by rand()
+sort by rand()
+                   '''
+
+
+month = [6, 7, 8, 9]
+month_name = ['June', 'July', 'Aug', 'Sep']
+
+
+mdse_grp_n = ['APPAREL_ACCESS', 'BEAUTY_COSMETICS',
+              'ESSENTIALS', 'FOOD_BEVERAGE', 'HARDLINES']
+
+
+# ## Data Import
+
+# In[15]:
+
+
+temp = temp=session.query(query.format(6,10))
+
+june_df = Preprep(temp)
+
+june_df = june_df[var]
+
+
+# In[7]:
+
+
+june_df.shape
+
+
+# In[16]:
+
+
+temp = temp=session.query(query.format(7,10))
+
+july_df = Preprep(temp)
+
+july_df = july_df[var]
+
+
+# In[17]:
+
+
+july_df.shape
+
+
+# ## Data summary and treatment
+
+# In[ ]:
+
+
+def summary(df):
+    summary1 = df.groupby('inf_flag').aggregate([np.mean, np.std]).T.unstack()
+    summary2 = df.aggregate(['mean', 'std']).T
+    summary = summary1.merge(summary2, right_index=True, left_index=True)
+    summary.columns = ['0_mean', '0_std', '1_mean', '1_std', 'mean', 'std']
+    summary['coef_0'] = summary['0_std']/summary['0_mean']
+    summary['coef_1'] = summary['1_std']/summary['1_mean']
+    summary['coef_all'] = summary['std']/summary['mean']
+    return summary
+
+
+# In[ ]:
+
+
+june_pre_summ = summary(june_df)
+june_pre_summ.head()
+
+
+# ### Negative values removal
+
+# In[ ]:
+
+
+summarydf = june_df.describe().T
+summarydf[summarydf['min'] < 0].index
+
+
+# In[ ]:
+
+
+rate_cols = ['availableqtywithoutthreshold', 'sales_1m', 'si_3_inf_rate', 'si_7_inf_rate', 'si_14_inf_rate', 'si_30_inf_rate',
+             'i_3_inf_rate', 'i_7_inf_rate', 'i_14_inf_rate', 'i_30_inf_rate',
+             'sdc_3_inf_rate', 'sdc_7_inf_rate', 'sdc_14_inf_rate',
+             '7d_inv_trnovr_rate', '7d_days_to_sell_inv', 'shp_oos_eoh_q',
+             '7d_min_shp_oos_eoh_q', 'allowance', 'release_qty']
+
+
+# In[ ]:
+
+
+for x in rate_cols:
+    june_df[x] = np.where(june_df[x] < 0,0,june_df[x])
+    july_df[x] = np.where(july_df[x] < 0,0,july_df[x])
+
+
+# In[ ]:
+
+
+def outlier_treatment(col):
+    '''
+    returns the upper limit for outliers
+    '''
+    q1, q3 = np.quantile(col, [.25, .75])
+    iqr = q3 - q1
+    return q3 + 1.5*iqr
+
+
+def outlier_treatment_df(main_df, depvar=dep_var):
+    '''
+    input : main_df, dep_var
+    return's : df, iqr_list
+    '''
+    df = main_df.copy()
+    iqr_list = {}
+    for col in depvar:
+        iqr_list[col] = outlier_treatment(df[col])
+    for col in depvar:
+        df['upper'] = iqr_list[col]
+        df[col] = [y if x > y else x for x, y in zip(df[col], df['upper'])]
+        df = df.drop(columns=['upper'])
+    return df, iqr_list
+
+
+# In[ ]:
+
+
+treated_df , iqr_list = outlier_treatment_df(june_df, dep_var)
+
+
+# In[ ]:
+
+
+print("***** Summary Before treatment *****")
+summary_original = summary(june_df)
+summary_original.head(7)
+
+
+# In[ ]:
+
+
+print("***** Summary After treatment *****")
+summary_treated = summary(treated_df)
+summary_treated.head(7)
+
+
+# In[ ]:
+
+
+temp = summary_original[['coef_all']].merge(
+    summary_treated[['coef_all']], right_index=True, left_index=True)
+
+temp['coeff_dif'] = np.where(temp.coef_all_x > temp.coef_all_y, 0, 1)
+
+temp.head()
+
+var_for_treat = list(temp[temp.coeff_dif == 0].index)
+
+var_for_treat
+
+
+# In[ ]:
+
+
+treated_df , iqr_list = outlier_treatment_df(june_df, var_for_treat)
+
+for col in var_for_treat:
+        july_df['upper'] = iqr_list[col]
+        july_df[col] = [y if x>y else x for x,y in zip(july_df[col],july_df['upper'])]
+        july_df = july_df.drop(columns=['upper'])
+
+
+# ## Model deployment All_var
+
+# ### Train-Test-Split
+
+# ### LGBM
+
+# In[ ]:
+
+
+x_train, x_test, y_train, y_test = train_test_split(treated_df[dep_var],treated_df['inf_flag'], train_size=0.7)
+
+
+# In[25]:
+
+
+### Testing model old and examin if we have improvement in data 
+lgbm_base = lgbm.LGBMClassifier(n_estimators = 2000, random_state = 1234, n_jobs = 5)
+
+base_model = lgbm_base.fit(x_train,y_train)
+
+train_prediction = base_model.predict(x_train)
+test_prediction = base_model.predict(x_test)
+
+
+# In[26]:
+
+
+print("*****. TRAIN JUNE DATA: BASE MODEL(Hardlines) ********" )
+print(sm.classification_report(y_train, train_prediction))
+
+
+# In[28]:
+
+
+print("*****. TEST JUNE DATA: BASE MODEL(Hardlines) ********" )
+print(sm.classification_report(y_test, test_prediction))
+
+
+# In[29]:
+
+
+test_prediction = base_model.predict(july_df[dep_var])
+
+
+print("*****. VALIDATION JULY DATA: BASE MODEL(Hardlines) ********" )
+print(sm.classification_report(july_df['inf_flag'], test_prediction))
+
+
+# ### After model tuning
+
+# In[143]:
+
+
+lgbm_1 = lgbm.LGBMClassifier(n_estimators = 250, n_jobs = -1, max_depth=20,class_weight={0:1,1:1.5},num_leaves=60, importance_type='gain'
+                             ,boosting_type="dart" )
+
+model_1 = lgbm_1.fit(x_train,y_train)
+
+train_prediction = model_1.predict(x_train)
+test_prediction = model_1.predict(x_test)
+
+print("*****. TRAIN DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_train, train_prediction))
+
+
+print("*****. VALIDATION DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_test, test_prediction))
+
+
+test_prediction = model_1.predict(july_df[dep_var])
+print("*****. TEST DATA: DEFAULT MODEL(Hardlines) ********" )
+print(sm.classification_report(july_df['inf_flag'], test_prediction))
+
+
+# In[52]:
+
+
+lgbm_1 = lgbm.LGBMClassifier(n_estimators = 200, n_jobs = -1, max_depth=10,class_weight={0:.8,1:1.2},num_leaves=50, importance_type='gain'
+                             ,boosting_type="dart" )
+
+model_1 = lgbm_1.fit(x_train,y_train)
+
+
+# In[53]:
+
+
+train_prediction = model_1.predict(x_train)
+test_prediction = model_1.predict(x_test)
+
+print("*****. TRAIN DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_train, train_prediction))
+
+
+print("*****. VALIDATION DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_test, test_prediction))
+
+
+test_prediction = model_1.predict(july_df[dep_var])
+print("*****. TEST DATA: DEFAULT MODEL(Hardlines) ********" )
+print(sm.classification_report(july_df['inf_flag'], test_prediction))
+
+
+# ### Random Forest
+
+# In[145]:
+
+
+from sklearn.ensemble import RandomForestClassifier as rfc
+
+
+# In[150]:
+
+
+rfc_1 = rfc(n_estimators = 300, n_jobs = -1, max_depth=20,class_weight={0:.8,1:2},min_samples_leaf=2)
+
+rfc_model = rfc_1.fit(x_train,y_train)
+
+
+# In[151]:
+
+
+train_prediction = rfc_model.predict(x_train)
+test_prediction = rfc_model.predict(x_test)
+
+print("*****. TRAIN DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_train, train_prediction))
+
+
+print("*****. VALIDATION DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_test, test_prediction))
+
+
+test_prediction = model_1.predict(july_df[dep_var])
+print("*****. TEST DATA: DEFAULT MODEL(Hardlines) ********" )
+print(sm.classification_report(july_df['inf_flag'], test_prediction))
+
+
+# ## Model selected variables
+
+# In[29]:
+
+
+select_var = ['shp_req_q',
+ 'availableqty',
+ 'availableqtywithoutthreshold',
+ 'days_sold_year',
+ 'sales_year',
+ 'units_year',
+ 'days_sold_1m',
+ 'days_sold_1m_norm',
+ 'units_1m',
+ 'days_sold_7d',
+ 'units_7d',
+ 'sales_1m',
+ 'days_sold_3m',
+ 'units_3m',
+ 'sales_3m',
+ 'sales_3m_norm',
+ 'days_since_last_sale_both',
+ 'item_year_sales',
+ 'no_of_stores_sold',
+ 'store_year_sales',
+ 'store_year_units',
+ 'days_since_last_sale',
+ 'days_since_first_sale',
+ 'days_sold_norm',
+ 'avg_eoh_3d',
+ 'avg_eoh_2d',
+ 'sales_year_norm',
+ 'units_year_norm',
+ 'retl_a',
+ 'avg_eoh_7d',
+ 'avg_eoh_q',
+ 'avg_eoh_30d',
+ 'days_avail',
+ 'eoh_q_lt_3',
+ 'perc_eoh_lt_3',
+ 'ipi',
+ 'total_oh',
+ 'nbr_str',
+ 'avg_oh_network',
+ 'si_inf_rate',
+ 'weight',
+ 'back_room_quantity',
+ 'si_3_inf_rate',
+ 'si_7_inf_rate',
+ 'si_14_inf_rate',
+ 'si_30_inf_rate',
+ 'research_evnt_exists_3days',
+ 'any_evnt_exists_3days',
+ 'research_evnt_exists_7days',
+ 'any_evnt_exists_7days',
+ 'si_3_fulfill',
+ 'i_3_fulfill',
+ 's_3_fulfill',
+ 'sdc_3_fulfill',
+ 'dc_3_fulfill',
+ 'boh_q',
+ 'eoh_q',
+ '7d_avg_boh_q',
+ '7d_avg_eoh_q',
+ '7d_boh_2_sls_rate',
+ '7d_eoh_2_sls_rate',
+ '7d_sell_thru_rate',
+ '7d_inv_trnovr_rate',
+ '7d_days_to_sell_inv',
+ '7d_actual_oh_avg',
+ 'repln_q',
+ '7d_repln_rate',
+ '7d_dc_high_repln_rate',
+ '7d_doh',
+ 'shp_oos_eoh_q',
+ '7d_min_shp_oos_eoh_q',
+ 'sls_forcast_q',
+ 'threshold',
+ 'allowance',
+ 'release_qty']
+
+
+# ### Test train Split
+
+# In[30]:
+
+
+x_train, x_test, y_train, y_test = train_test_split(treated_df[select_var],treated_df['inf_flag'], train_size=0.7)
+
+
+# ### LGBM Select_vars_1
+
+# In[167]:
+
+
+lgbm_1 = lgbm.LGBMClassifier(n_estimators = 250, n_jobs = -1, max_depth=20,class_weight={0:1,1:1.5},num_leaves=60, importance_type='gain'
+                             ,boosting_type="dart" )
+
+model_1 = lgbm_1.fit(x_train,y_train)
+
+train_prediction = model_1.predict(x_train)
+test_prediction = model_1.predict(x_test)
+
+
+# In[168]:
+
+
+print("*****. TRAIN DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_train, train_prediction))
+
+
+print("*****. VALIDATION DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_test, test_prediction))
+
+
+test_prediction = model_1.predict(july_df[select_var])
+print("*****. TEST DATA: DEFAULT MODEL(Hardlines) ********" )
+print(sm.classification_report(july_df['inf_flag'], test_prediction))
+
+
+# ### LGBM Select_vars_2
+
+# In[181]:
+
+
+lgbm_1 = lgbm.LGBMClassifier(n_estimators = 300, n_jobs = -1, max_depth=20,class_weight={0:.8,1:2.5},num_leaves=300,importance_type='gain'
+                             ,boosting_type="dart" )
+
+model_1 = lgbm_1.fit(x_train,y_train)
+
+train_prediction = model_1.predict(x_train)
+test_prediction = model_1.predict(x_test)
+
+print("*****. TRAIN DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_train, train_prediction))
+
+
+print("*****. VALIDATION DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_test, test_prediction))
+
+
+test_prediction = model_1.predict(july_df[select_var])
+print("*****. TEST DATA: DEFAULT MODEL(Hardlines) ********" )
+print(sm.classification_report(july_df['inf_flag'], test_prediction))
+
+
+# In[ ]:
+
+
+
+
+
+# ### Random Forest Select_vars
+
+# In[169]:
+
+
+rfc_1 = rfc(n_estimators = 300, n_jobs = -1, max_depth=20,class_weight={0:.8,1:2},min_samples_leaf=2)
+
+rfc_model = rfc_1.fit(x_train,y_train)
+
+
+# In[184]:
+
+
+train_prediction = rfc_model.predict(x_train)
+test_prediction = rfc_model.predict(x_test)
+
+print("*****. TRAIN DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_train, train_prediction))
+
+
+print("*****. VALIDATION DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_test, test_prediction))
+
+
+test_prediction = rfc_model.predict(july_df[select_var])
+print("*****. TEST DATA: DEFAULT MODEL(Hardlines) ********" )
+print(sm.classification_report(july_df['inf_flag'], test_prediction))
+
+
+# In[192]:
+
+
+rfc_1 = rfc(n_estimators = 350, n_jobs = -1, max_depth=20,class_weight={0:.8,1:4})
+
+rfc_model = rfc_1.fit(x_train,y_train)
+
+train_prediction = rfc_model.predict(x_train)
+test_prediction = rfc_model.predict(x_test)
+
+print("*****. TRAIN DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_train, train_prediction))
+
+
+print("*****. VALIDATION DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_test, test_prediction))
+
+
+test_prediction = rfc_model.predict(july_df[select_var])
+print("*****. TEST DATA: DEFAULT MODEL(Hardlines) ********" )
+print(sm.classification_report(july_df['inf_flag'], test_prediction))
+
+
+# ## Variable transformation (Scale + Power)
+
+# In[443]:
+
+
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import PowerTransformer
+from sklearn.pipeline import Pipeline
+
+
+
+scaler = MinMaxScaler()
+pt = PowerTransformer(method='yeo-johnson')
+pipeline = Pipeline(steps=[('s', scaler), ('p', pt)])
+# pipeline = Pipeline(steps=[('s', scaler)])
+
+pipeline_ft = pipeline.fit(x_train)
+trans_x_train = pipeline_ft.transform(x_train)
+trans_x_test = pipeline_ft.transform(x_test)
+trans_july_df = pipeline_ft.transform(july_df[select_var])
+
+
+# In[445]:
+
+
+# np.round(pipeline_ft['p'].lambdas_,2)
+
+
+# In[446]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# ### LGBM Model
+
+# In[249]:
+
+
+lgbm_1 = lgbm.LGBMClassifier(n_estimators = 250, n_jobs = -1, max_depth=20,class_weight={0:1,1:1.5},num_leaves=60, importance_type='gain'
+                             ,boosting_type="dart" )
+
+model_1 = lgbm_1.fit(trans_x_train,y_train)
+
+train_prediction = model_1.predict(trans_x_train)
+test_prediction = model_1.predict(trans_x_test)
+
+
+# In[250]:
+
+
+print("*****. TRAIN DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_train, train_prediction))
+
+
+print("*****. VALIDATION DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_test, test_prediction))
+
+
+test_prediction = model_1.predict(trans_july_df)
+print("*****. TEST DATA: DEFAULT MODEL(Hardlines) ********" )
+print(sm.classification_report(july_df['inf_flag'], test_prediction))
+
+
+# ### RFC Model
+
+# In[265]:
+
+
+rfc_1 = rfc(n_estimators = 1000,n_jobs = -1)
+
+rfc_model = rfc_1.fit(x_train,y_train)
+
+train_prediction = rfc_model.predict(trans_x_train)
+test_prediction = rfc_model.predict(trans_x_test)
+
+print("*****. TRAIN DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_train, train_prediction))
+
+
+print("*****. VALIDATION DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_test, test_prediction))
+
+
+test_prediction = rfc_model.predict(trans_july_df)
+print("*****. TEST DATA: DEFAULT MODEL(Hardlines) ********" )
+print(sm.classification_report(july_df['inf_flag'], test_prediction))
+
+
+# ## cPCA transformation of data
+
+# In[353]:
+
+
+from contrastive import CPCA
+
+c_pca = CPCA(standardize=True, verbose=True)
+
+
+# In[360]:
+
+
+# background = trans_x_train[np.where(y_train==0)]
+background = x_train[y_train==0]
+target = y_train
+
+
+# In[325]:
+
+
+# pca_X_trans  = c_pca.fit(trans_x_train[y_train],background,gui=True)
+
+
+# In[88]:
+
+
+c_pca.fit_transform(x_train[y_train],background)
+
+
+# In[366]:
+
+
+# pca_x_train = c_pca.fit_transform(trans_x_train,background,active_labels=y_train)
+pca_x_train = c_pca.fit_transform(x_train,background,active_labels=y_train)
+
+# print(pca_x_train.shape)
+
+pca_x_test = c_pca.fit_transform(x_test,background,active_labels=y_train)
+
+# print(pca_x_test.shape)
+
+pca_x_july = c_pca.fit_transform(july_df[select_var],background,active_labels=y_train)
+
+
+# In[367]:
+
+
+np.shape(pca_x_train)
+
+
+# ### LGBM after cPCA
+
+# In[371]:
+
+
+lgbm_trans = lgbm.LGBMClassifier(n_jobs = -1, importance_type='gain'
+                             ,boosting_type="dart" )
+
+model_trans = lgbm_trans.fit(pca_x_train[0],y_train)
+
+train_prediction = model_trans.predict(pca_x_train[0])
+test_prediction = model_trans.predict(pca_x_test[0])
+
+
+# In[372]:
+
+
+print("*****. cPCA TRAIN DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_train, train_prediction))
+
+
+print("*****. cPCA VALIDATION DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_test, test_prediction))
+
+
+test_prediction = model_trans.predict(pca_x_july[0])
+print("*****. cPCA  TEST DATA: DEFAULT MODEL(Hardlines) ********" )
+print(sm.classification_report(july_df['inf_flag'], test_prediction))
+
+
+# In[322]:
+
+
+rfc_1 = rfc(n_estimators = 100,n_jobs = -1,max_depth=10)
+
+rfc_model = rfc_1.fit(pca_x_train,y_train)
+
+train_prediction = rfc_model.predict(pca_x_train)
+test_prediction = rfc_model.predict(pca_x_test)
+
+print("*****. TRAIN DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_train, train_prediction))
+
+
+print("*****. VALIDATION DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_test, test_prediction))
+
+
+test_prediction = rfc_model.predict(pca_x_july)
+print("*****. TEST DATA: DEFAULT MODEL(Hardlines) ********" )
+print(sm.classification_report(july_df['inf_flag'], test_prediction))
+
+
+# In[ ]:
+
+
+
+
+
+# ## Variable transformation (Autoencoder)
+
+# In[31]:
+
+
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import PowerTransformer
+from sklearn.pipeline import Pipeline
+
+scaler = MinMaxScaler()
+pt = PowerTransformer(method='yeo-johnson')
+# pipeline = Pipeline(steps=[('s', scaler), ('p', pt)])
+pipeline = Pipeline(steps=[('s', scaler)])
+
+pipeline_ft = pipeline.fit(x_train)
+trans_x_train = pipeline_ft.transform(x_train)
+trans_x_test = pipeline_ft.transform(x_test)
+trans_july_df = pipeline_ft.transform(july_df[select_var])
+
+
+# ### Autoencoder
+
+# In[32]:
+
+
+import math
+import pandas as pd
+import tensorflow as tf
+import kerastuner.tuners as kt
+import matplotlib.pyplot as plt
+from tensorflow.keras import Model
+from tensorflow.keras import Sequential
+from sklearn.preprocessing import StandardScaler
+from tensorflow.keras.layers import Dense, Dropout
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.losses import MeanSquaredLogarithmicError
+
+
+# In[33]:
+
+
+class AutoEncoders(Model):
+    
+    def __init__(self, output_units):
+        super().__init__()
+        self.encoder = Sequential(
+            [
+                Dense(output_units, activation="relu"),
+                Dense(64, activation="relu"),
+                Dense(32, activation="relu"),
+                Dense(7, activation="relu")
+            ]
+        )
+        self.decoder = Sequential(
+            [
+          Dense(32, activation="relu"),
+          Dense(64, activation="relu"),
+          Dense(output_units, activation="sigmoid")
+            ]
+        )
+    
+    def call(self, inputs):
+        encoded = self.encoder(inputs)
+        decoded = self.decoder(encoded)
+        return decoded
+
+
+# In[34]:
+
+
+auto_encoder = AutoEncoders(trans_x_train.shape[1])
+
+auto_encoder.compile(
+    loss='mae',
+    metrics=['mae'],
+    optimizer='adam')
+
+history = auto_encoder.fit(
+    trans_x_train[y_train==0], 
+    trans_x_train[y_train==0], 
+    epochs=30, 
+    batch_size=300, 
+    validation_data=(trans_x_test[y_test==0], trans_x_test[y_test==0])
+)
+
+
+# In[35]:
+
+
+encoder_layer = auto_encoder.get_layer('sequential')
+
+
+# In[36]:
+
+
+encoder_layer.output_shape
+
+
+# In[37]:
+
+
+reduced_df = pd.DataFrame(encoder_layer.predict(trans_x_train))
+reduced_df = reduced_df.add_prefix('feature_')
+
+
+# In[38]:
+
+
+reduced_df
+
+
+# In[39]:
+
+
+reduced_df_test = pd.DataFrame(encoder_layer.predict(trans_x_test))
+reduced_df_test = reduced_df_test.add_prefix('feature_')
+
+
+# In[40]:
+
+
+reduced_df_july = pd.DataFrame(encoder_layer.predict(trans_july_df))
+reduced_df_july = reduced_df_july.add_prefix('feature_')
+
+
+# ### Model Training LGBM
+
+# In[471]:
+
+
+lgbm_trans = lgbm.LGBMClassifier(n_estimators = 250,n_jobs = -1, importance_type='gain',class_weight={0:1,1:1.5}
+                             ,boosting_type="dart" )
+
+model_trans = lgbm_trans.fit(reduced_df,y_train)
+
+train_prediction = model_trans.predict(reduced_df)
+test_prediction = model_trans.predict(reduced_df_test)
+
+
+# In[472]:
+
+
+print("*****. Autoencoder TRAIN DATA (June): Model_1(Hardlines) ********" )
+print(sm.classification_report(y_train, train_prediction))
+
+
+print("*****. Autoencoder VALIDATION DATA (June): Model_1(Hardlines) ********" )
+print(sm.classification_report(y_test, test_prediction))
+
+
+test_prediction = model_trans.predict(reduced_df_july)
+print("*****. Autoencoder  TEST DATA (July): DEFAULT MODEL(Hardlines) ********" )
+print(sm.classification_report(july_df['inf_flag'], test_prediction))
+
+
+# ### Model Training RF
+
+# In[485]:
+
+
+rfc_1 = rfc(n_estimators = 500, n_jobs = -1, max_depth=10,class_weight={0:.8,1:4},min_samples_leaf=2)
+
+model_trans = rfc_1.fit(reduced_df,y_train)
+
+train_prediction = model_trans.predict(reduced_df)
+
+
+# In[486]:
+
+
+test_prediction = model_trans.predict(reduced_df_test)
+
+
+# In[487]:
+
+
+print("*****. Autoencoder TRAIN DATA (June): Model_1(Hardlines) ********" )
+print(sm.classification_report(y_train, train_prediction))
+
+
+print("*****. Autoencoder VALIDATION DATA (June): Model_1(Hardlines) ********" )
+print(sm.classification_report(y_test, test_prediction))
+
+
+test_prediction = model_trans.predict(reduced_df_july)
+print("*****. Autoencoder  TEST DATA (July): DEFAULT MODEL(Hardlines) ********" )
+print(sm.classification_report(july_df['inf_flag'], test_prediction))
+
+
+# In[ ]:
+
+
+
+
+
+# ## cPCA transformation
+
+# ### Step1: Removing false positives
+
+# In[133]:
+
+
+lgbm_1 = lgbm.LGBMClassifier(n_estimators = 1000, n_jobs = -1, max_depth=20,class_weight={0:.8,1:2.5},num_leaves=300,importance_type='gain'
+                             ,boosting_type="dart" )
+model_1 = lgbm_1.fit(x_train,y_train)
+
+
+# In[134]:
+
+
+train_prediction = model_1.predict(x_train)
+test_prediction = model_1.predict(x_test)
+
+print("*****. TRAIN DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_train, train_prediction))
+
+
+# In[142]:
+
+
+x_train['y_train'] = y_train
+x_train['y_predicted'] = train_prediction
+
+x_train['sudo_y'] = np.where((x_train.y_train==0) & (x_train.y_predicted ==0),0,1)
+
+x_train['false_positives'] = np.where((x_train.y_train==0) & (x_train.y_predicted ==1),1,0)
+
+re_x_train = x_train[x_train.false_positives==0]
+
+re_ytrain = re_x_train['y_train']
+re_x_train = re_x_train.drop(columns=['y_predicted','sudo_y','y_train'])
+
+re_x_train = re_x_train.drop(columns=['false_positives'])
+
+x_train = x_train.drop(columns=['false_positives'])
+
+x_train = x_train.drop(columns=['y_predicted','sudo_y','y_train'])
+
+
+# In[143]:
+
+
+x_train.shape
+
+
+# In[144]:
+
+
+re_x_train.shape
+
+
+# In[146]:
+
+
+# x_train.columns
+
+
+# ### Minmax scaler
+
+# In[147]:
+
+
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import PowerTransformer
+from sklearn.pipeline import Pipeline
+
+
+
+scaler = MinMaxScaler()
+pt = PowerTransformer(method='yeo-johnson')
+# pipeline = Pipeline(steps=[('s', scaler), ('p', pt)])
+pipeline = Pipeline(steps=[('s', scaler)])
+
+pipeline_ft = pipeline.fit(x_train)
+trans_x_train = pipeline_ft.transform(x_train)
+trans_x_retrain = pipeline_ft.transform(re_x_train)
+trans_x_test = pipeline_ft.transform(x_test)
+trans_july_df = pipeline_ft.transform(july_df[select_var])
+
+
+# ### cPCA transformation
+
+# In[148]:
+
+
+from contrastive import CPCA
+
+c_pca = CPCA(standardize=False, verbose=True,n_components=2)
+
+
+# In[149]:
+
+
+background = trans_x_retrain[re_ytrain==0]
+target = re_ytrain
+
+
+# In[150]:
+
+
+c_pca.fit_transform(trans_x_retrain, background, plot=True,active_labels=re_ytrain,gui=True,colors=['r','b','k','c'])
+
+
+# In[151]:
+
+
+c_pca = CPCA(standardize=True, verbose=True,n_components=20)
+
+# pca_x_train = c_pca.fit_transform(trans_x_train,background,active_labels=y_train)
+pca_x_train = c_pca.fit_transform(trans_x_retrain,background,alpha_selection='manual', alpha_value=1.34,active_labels=re_ytrain)
+
+# print(pca_x_train.shape)
+
+pca_x_test = c_pca.fit_transform(trans_x_test,background,alpha_selection='manual', alpha_value=1.34,active_labels=re_ytrain)
+
+# print(pca_x_test.shape)
+
+pca_x_july = c_pca.fit_transform(trans_july_df,background,active_labels=re_ytrain,alpha_selection='manual', alpha_value=1.34)
+
+
+# In[152]:
+
+
+type(pca_x_test)
+
+
+# In[ ]:
+
+
+lgbm_trans = lgbm.LGBMClassifier(n_estimators = 300, n_jobs = -1,class_weight={0:.8,1:1.5},num_leaves=300,importance_type='gain'
+                             ,boosting_type="dart" )
+
+model_trans = lgbm_trans.fit(pca_x_train,re_ytrain)
+
+
+# In[160]:
+
+
+train_prediction = model_trans.predict(pca_x_train)
+test_prediction = model_trans.predict(pca_x_test)
+
+
+# In[163]:
+
+
+print("*****. cPCA TRAIN DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(re_ytrain, train_prediction))
+
+
+# In[164]:
+
+
+print("*****. cPCA VALIDATION DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_test, test_prediction))
+
+
+# In[165]:
+
+
+test_prediction = model_trans.predict(pca_x_july)
+print("*****. cPCA  TEST DATA: DEFAULT MODEL(Hardlines) ********" )
+print(sm.classification_report(july_df['inf_flag'], test_prediction))
+
+
+# ### RFC
+
+# In[131]:
+
+
+lgbm_trans = rfc(n_estimators = 500, n_jobs = -1, max_depth=10,class_weight={0:.8,1:5},min_samples_leaf=2)
+
+model_trans = lgbm_trans.fit(pca_x_train,re_ytrain)
+
+train_prediction = model_trans.predict(pca_x_train)
+test_prediction = model_trans.predict(pca_x_test)
+
+
+# In[132]:
+
+
+print("*****. cPCA TRAIN DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(re_ytrain, train_prediction))
+
+
+print("*****. cPCA VALIDATION DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_test, test_prediction))
+
+
+test_prediction = model_trans.predict(pca_x_july)
+print("*****. cPCA  TEST DATA: DEFAULT MODEL(Hardlines) ********" )
+print(sm.classification_report(july_df['inf_flag'], test_prediction))
+
+
+# ### LGBM Model: After false positves without transformation
+
+# In[169]:
+
+
+lgbm_1 = lgbm.LGBMClassifier(n_estimators = 300, n_jobs = -1, max_depth=20,class_weight={0:.8,1:2.5},num_leaves=300,importance_type='gain'
+                             ,boosting_type="dart" )
+
+model_1 = lgbm_1.fit(re_x_train,re_ytrain)
+
+train_prediction = model_1.predict(re_x_train)
+test_prediction = model_1.predict(x_test)
+
+print("*****. TRAIN DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(re_ytrain, train_prediction))
+
+
+print("*****. VALIDATION DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_test, test_prediction))
+
+
+test_prediction = model_1.predict(july_df[select_var])
+print("*****. TEST DATA: DEFAULT MODEL(Hardlines) ********" )
+print(sm.classification_report(july_df['inf_flag'], test_prediction))
+
+
+# In[170]:
+
+
+lgbm_1 = lgbm.LGBMClassifier(n_estimators = 500, n_jobs = -1, max_depth=20,class_weight={0:.8,1:2.5},num_leaves=300,importance_type='gain'
+                             ,boosting_type="dart" )
+
+model_1 = lgbm_1.fit(re_x_train,re_ytrain)
+
+train_prediction = model_1.predict(re_x_train)
+test_prediction = model_1.predict(x_test)
+
+print("*****. TRAIN DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(re_ytrain, train_prediction))
+
+
+print("*****. VALIDATION DATA: Model_1(Hardlines) ********" )
+print(sm.classification_report(y_test, test_prediction))
+
+
+test_prediction = model_1.predict(july_df[select_var])
+print("*****. TEST DATA: DEFAULT MODEL(Hardlines) ********" )
+print(sm.classification_report(july_df['inf_flag'], test_prediction))
+
+
+# In[174]:
+
+
+from sklearn.metrics import average_precision_score
+from sklearn.metrics import precision_recall_curve
+
+precision_recall_curve(july_df['inf_flag'], test_prediction)
+
+
+# In[177]:
+
+
+precision, recall, overall = precision_recall_curve(july_df['inf_flag'], test_prediction)
+
+
+# In[179]:
+
+
+precision[1]
+
+
+# ## Testing each variable performance
+# 
+# ***measuring variable performance in iterative manner by taking each variable at one time***
+
+# In[199]:
+
+
+lgbm_model = lgbm.LGBMClassifier(n_estimators = 200, n_jobs = -1, class_weight={0:.8,1:3.5},importance_type='gain'
+                             ,boosting_type="dart" )
+precision_score = []
+recall_score = []
+for var in select_var:
+    model_fit = lgbm_model.fit(re_x_train[[var]],re_ytrain)
+    test_prediction = model_fit.predict(x_test[[var]])
+    precision, recall, overall = precision_recall_curve(y_test, test_prediction)
+    precision_score.append(precision[1])
+    recall_score.append(recall[1])
+
+
+# In[200]:
+
+
+## Here we are measuring precisio/recall for each variable and sorting by maximum recall
+
+precision_recall_df = pd.DataFrame({"Variables":select_var,"Precision":precision_score,"Recall":recall_score})
+precision_recall_df = precision_recall_df.sort_values(by='Recall', ascending=False)
+precision_recall_df
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
